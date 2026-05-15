@@ -1,150 +1,249 @@
-# 04 Google Sheets Architecture
+# 05 Workflow
 
-## Workbook Structure
+## 1. Source Update Workflow
 
-Operational sheets:
+### Manual Sources
 
-1. `laborcost_cgd`
-2. `laborcost_obec`
-3. `materialcost_obec`
-4. `materialcost_tpso`
-5. `STAGING_NORMALIZED`
-6. `MASTER_PRICE_DATABASE`
-7. `ALIAS_DICTIONARY`
-8. `REFRESH_LOG`
-9. `SEARCH_LOG`
-10. `ALIAS_SUGGESTIONS` if alias suggestion process is implemented
-
-Documentation sheet:
-
-11. `CHECKLIST_2_SCHEMA`
-
-## Sheet Roles
-
-### `laborcost_cgd`
-
-- Raw source sheet.
-- Manual update.
-- Yearly update.
-- Input only.
-- WebApp must not read directly.
-
-### `laborcost_obec`
-
-- Raw source sheet.
-- Manual update.
-- Yearly update.
-- Input only.
-- WebApp must not read directly.
-
-### `materialcost_obec`
-
-- Raw source sheet.
-- Manual update.
-- Yearly update.
-- Input only.
-- WebApp must not read directly.
-
-### `materialcost_tpso`
-
-- Raw source sheet.
-- API monthly update.
-- Input only.
-- WebApp must not read directly.
-- Header may not be on row 1. Must use special header detection.
-
-### `STAGING_NORMALIZED`
-
-- Processing sheet.
-- Used for normalization and validation before master update.
-- WebApp must not read directly.
-
-### `MASTER_PRICE_DATABASE`
-
-- Searchable master database.
-- WebApp reads from this sheet only.
-- Comparison flow reads from this sheet only.
-- User should not edit manually.
-
-### `ALIAS_DICTIONARY`
-
-- Dictionary for user terms, canonical terms, and related search terms.
-- Used to enrich `alias_terms`.
-- Can be edited through controlled manual process.
-
-### `REFRESH_LOG`
-
-- Stores refresh/process logs.
-- Used for audit.
-- WebApp does not read directly.
-
-### `SEARCH_LOG`
-
-- Stores user search behavior.
-- Used to improve alias/search quality later.
-- WebApp may write to this sheet.
-
-### `CHECKLIST_2_SCHEMA`
-
-- Documentation only.
-- Not a data source.
-- WebApp must not read.
-
-## Header Rules
-
-For all database/processing/log sheets:
-
-- Header must be one row only.
-- Header should be row 1.
-- No field description row in row 2.
-- No merged cells.
-- No blank row before header.
-
-Exception:
-
-- `materialcost_tpso` may contain metadata before the actual header.
-- Script must find real header row by fields such as `Column ID`, `type`, `typeName`.
-- If header row cannot be found, stop processing and do not update master.
-
-## Sheet Protection
-
-Manual edit allowed:
+Sources:
 
 - `laborcost_cgd`
 - `laborcost_obec`
 - `materialcost_obec`
-- `ALIAS_DICTIONARY`
 
-System/API update only:
+Flow:
+
+```text
+Manual source update
+→ process selected source
+→ normalize to STAGING_NORMALIZED
+→ validate staging rows
+→ if validation passes, replace only that source in MASTER_PRICE_DATABASE
+→ write REFRESH_LOG
+```
+
+### TPSO API Source
+
+Source:
 
 - `materialcost_tpso`
-- `STAGING_NORMALIZED`
-- `MASTER_PRICE_DATABASE`
-- `REFRESH_LOG`
-- `SEARCH_LOG`
-- `ALIAS_SUGGESTIONS` if implemented
 
-Documentation only:
+Flow:
 
-- `CHECKLIST_2_SCHEMA`
+```text
+Call TPSO API
+→ write API result to materialcost_tpso
+→ detect real header row
+→ normalize TPSO rows to STAGING_NORMALIZED
+→ validate staging rows
+→ if validation passes, replace only TPSO rows in MASTER_PRICE_DATABASE
+→ write REFRESH_LOG
+```
 
-## WebApp Scope
+If API fails, returns 0 rows, or required header is missing:
 
-WebApp read:
+```text
+stop process
+→ keep existing TPSO rows in MASTER_PRICE_DATABASE
+→ write REFRESH_LOG with failure/block status
+```
 
-- `MASTER_PRICE_DATABASE`
-- `ALIAS_DICTIONARY` only if necessary for search
+## 2. Normalization Workflow
 
-WebApp write:
+For every source row:
 
-- `SEARCH_LOG` only
+```text
+source row
+→ map source fields to common schema
+→ create item_name_clean
+→ create search_keywords
+→ enrich alias_terms from ALIAS_DICTIONARY
+→ create normalized_text
+→ add validation fields
+→ write to STAGING_NORMALIZED
+```
 
-WebApp must not write:
+## 3. Search Helper Field Generation
 
-- Raw source sheets
-- `STAGING_NORMALIZED`
-- `MASTER_PRICE_DATABASE`
-- `REFRESH_LOG`
-- `ALIAS_DICTIONARY`
+### `item_name_clean`
 
-Phase 1 comparison flow does not write `COMPARISON_LOG`.
+Generated from `item_name_original` using rule-based cleaning:
+
+- Trim leading/trailing spaces.
+- Collapse repeated spaces.
+- Standardize simple symbols and units where safe.
+- Do not change meaning.
+- Do not remove important notes.
+
+### `search_keywords`
+
+Generated from:
+
+- `item_name_clean`
+- `category_level_1`
+- `category_level_2`
+- `category_level_3`
+- `unit`
+- `note`
+
+Rules:
+
+- Preserve specs such as `2x2.5`, `20mm`, `1/2"`, `VAF`, `THW`.
+- Remove duplicates.
+- Remove low-value stop words where safe.
+- Regenerate during source refresh.
+
+### `alias_terms`
+
+Generated from `ALIAS_DICTIONARY` only.
+
+Rules:
+
+- Match against `user_term`, `canonical_term`, `related_terms`, and `category_hint`.
+- Use only active aliases where `active = yes`.
+- Do not let Apps Script invent aliases from scratch.
+- If no alias matches, leave blank.
+
+### `normalized_text`
+
+Generated by combining:
+
+- `item_name_original`
+- `item_name_clean`
+- `category_level_1`
+- `category_level_2`
+- `category_level_3`
+- `unit`
+- `note`
+- `search_keywords`
+- `alias_terms`
+- `source_type`
+- `price_basis`
+
+Then:
+
+- Lowercase English text.
+- Trim spaces.
+- Remove duplicate terms where possible.
+
+## 4. Validation Workflow
+
+Critical failures block master update:
+
+- Row count = 0.
+- Required header missing.
+- Header row cannot be detected.
+- Source mapping fails.
+- `item_name_original` blank.
+- `unit` blank.
+- Both `material_cost` and `labor_cost` blank.
+- `material_cost` negative.
+- `labor_cost` negative.
+- `source_name` blank.
+- `source_type` blank.
+- `price` blank.
+- `total_cost` blank.
+- API response empty.
+- API fail.
+
+Warning validation:
+
+- Data pattern looks unusual compared with same source.
+- Row count drops by more than 30% from previous run.
+
+Warning handling:
+
+- Use Option C.
+- If warning exceeds threshold, block the entire source update.
+- Keep existing master data for that source unchanged.
+
+## 5. Master Update Workflow
+
+```text
+if validation passes:
+    delete only old rows where source_name = updated source
+    append new rows from STAGING_NORMALIZED
+    update data_status
+    update last_refresh_at
+    write REFRESH_LOG success/completed_with_warning
+else:
+    keep existing master data unchanged
+    write REFRESH_LOG failed/blocked_by_validation
+```
+
+Never delete old master rows before validation passes.
+
+Never rebuild the entire master sheet unless explicitly instructed.
+
+## 6. Search Workflow
+
+```text
+user query
+→ normalize query
+→ search MASTER_PRICE_DATABASE only
+→ exact / partial / token / alias / fuzzy match
+→ calculate match_score
+→ sort high to low
+→ return top 10
+→ write SEARCH_LOG
+```
+
+Search result cards must not show:
+
+- `source_name`
+- `source_type`
+- `match_reason`
+
+## 7. User Selection Workflow
+
+```text
+user selects candidate result
+→ receive selected_master_id
+→ fetch row from MASTER_PRICE_DATABASE
+→ display selected item detail read-only
+→ update SEARCH_LOG with selected_master_id if possible
+```
+
+## 8. Price Comparison Workflow
+
+```text
+selected item
++ user_price
++ user_unit
++ user_quantity
++ user_price_type
++ user_note
+→ choose reference price
+→ check unit matching
+→ convert unit if needed
+→ calculate variance
+→ classify result using ±10% threshold
+→ display result
+```
+
+No `COMPARISON_LOG` in Phase 1.
+
+The comparison flow must not write to source, staging, or master sheets.
+
+## 9. Unit Conversion Workflow
+
+Use rule-based conversion first:
+
+- kg ↔ ton
+- g ↔ kg
+- m ↔ cm
+- m2 ↔ cm2
+- m3 ↔ liter
+- piece ↔ dozen
+- hour ↔ day with clear assumption
+- day ↔ month with clear assumption
+
+Use Gemini only if the unit requires interpretation or assumptions, such as:
+
+- roll → meter
+- bag → kilogram
+- set → component items
+- job → actual quantity
+- point → installation point
+- trip → distance/volume
+
+If conversion cannot be done, return `cannot_compare` and ask for missing information.

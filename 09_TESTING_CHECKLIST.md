@@ -1,158 +1,244 @@
-# 08 Gemini / API Boundary
+# 09 Testing Checklist
 
-## Overview
+All tests in this document are required for Phase 1.
 
-Phase 1 uses two external service groups:
+## 1. Sheet Structure Tests
 
-1. TPSO API for monthly material price updates.
-2. Gemini for complex unit conversion support only.
+Test that required sheets exist:
 
-## TPSO API Boundary
+- `laborcost_cgd`
+- `laborcost_obec`
+- `materialcost_obec`
+- `materialcost_tpso`
+- `STAGING_NORMALIZED`
+- `MASTER_PRICE_DATABASE`
+- `ALIAS_DICTIONARY`
+- `REFRESH_LOG`
+- `SEARCH_LOG`
+- `CHECKLIST_2_SCHEMA`
+- `ALIAS_SUGGESTIONS` if implemented
 
-TPSO API is used to:
+Test:
 
-- Fetch monthly material prices.
-- Write data into `materialcost_tpso` only.
-- Trigger normalization into `STAGING_NORMALIZED` after success.
-- Update `MASTER_PRICE_DATABASE` only after validation passes.
+- Data sheets have one header row.
+- Master and staging headers are row 1.
+- No merged cells in script-read sheets.
+- `CHECKLIST_2_SCHEMA` is not used as data source.
 
-TPSO API must not:
+## 2. Schema Tests
 
-- Write directly into `MASTER_PRICE_DATABASE`.
-- Delete `MASTER_PRICE_DATABASE`.
-- Delete existing TPSO master rows before validation passes.
-- Affect CGD or OBEC data.
-- Change `ALIAS_DICTIONARY`.
-- Change `SEARCH_LOG`.
+Validate `MASTER_PRICE_DATABASE` columns match `03_DATA_SCHEMA.md`.
 
-## TPSO Failure Handling
+Validate `STAGING_NORMALIZED` columns match `03_DATA_SCHEMA.md`.
 
-If TPSO API fails:
+Validate `REFRESH_LOG`, `SEARCH_LOG`, and `ALIAS_DICTIONARY` schemas.
 
-- Stop process.
-- Do not change `MASTER_PRICE_DATABASE`.
-- Keep existing TPSO master rows.
-- Write `REFRESH_LOG` with `failed`.
-- Capture safe `error_message`.
+## 3. Source Mapping Tests
 
-If API returns 0 rows:
+Test price mapping for all sources:
 
-- Treat as failure or `blocked_by_validation`.
-- Do not replace existing data.
-- Write `REFRESH_LOG`.
-- Error message should say API returned 0 rows.
+- `laborcost_cgd`
+- `laborcost_obec`
+- `materialcost_obec`
+- `materialcost_tpso`
 
-If API structure changes:
+Ensure `material_cost`, `labor_cost`, `total_cost`, `price`, and `price_basis` are correct.
 
-- If required header is missing, fail.
-- Do not guess risky column mapping.
-- Do not update master.
+## 4. TPSO API Tests
 
-## TPSO Header Detection
+Test:
 
-For `materialcost_tpso`:
+- Successful API fetch.
+- Write to `materialcost_tpso` first.
+- No direct write to master.
+- Header detection.
+- API failure does not change master.
+- API 0 rows does not change master.
+- Missing required header does not change master.
+- `REFRESH_LOG` written on failure.
 
-- Do not assume header is row 1.
-- Detect actual header row using fields such as `Column ID`, `type`, `typeName`.
-- If header row cannot be found, stop processing.
-- Data starts after the detected header row.
+## 5. Normalize / Search Field Generation Tests
 
-## Gemini Scope
+Test generation of:
 
-Gemini may be used only for complex unit conversion.
+- `item_name_clean`
+- `search_keywords`
+- `alias_terms`
+- `normalized_text`
 
-Gemini may:
+Check:
 
-- Interpret non-standard units.
-- Suggest what additional data user must provide.
-- Explain conversion assumptions.
-- Help calculate when conversion factor is clear.
-- Return `cannot_compare` when data is insufficient.
+- `item_name_clean` does not change meaning.
+- Specs are preserved, such as `2x2.5`, `20mm`, `1/2"`, `VAF`, `THW`.
+- Alias enrichment uses only active `ALIAS_DICTIONARY` rows.
+- No auto-add to `ALIAS_DICTIONARY`.
 
-Examples:
+## 6. Validation Tests
 
-- User unit = roll, database unit = meter. Ask how many meters per roll.
-- User unit = bag, database unit = kilogram. Ask kg per bag.
-- User unit = job, database unit = point. Ask number of points per job.
+Critical validation tests:
 
-## Gemini Prohibited Actions
+- Row count = 0.
+- Required header missing.
+- Header row cannot be detected.
+- `item_name_original` blank.
+- `unit` blank.
+- Both `material_cost` and `labor_cost` blank.
+- Negative material cost.
+- Negative labor cost.
+- `source_name` blank.
+- `source_type` blank.
+- `price` blank.
+- `total_cost` blank.
+- API response empty.
+- API fail.
 
-Gemini must not:
+Warning validation tests:
 
-1. Guess new prices.
-2. Change prices from `MASTER_PRICE_DATABASE`.
-3. Overwrite `MASTER_PRICE_DATABASE`.
-4. Update raw source sheets.
-5. Update `STAGING_NORMALIZED`.
-6. Update `ALIAS_DICTIONARY` directly.
-7. Update `SEARCH_LOG` directly.
-8. Approve prices.
-9. Reject prices.
-10. Conclude high/low price if units cannot be compared.
-11. Act as Phase 1 core search engine.
-12. Auto-select search results.
-13. Auto-learn aliases into master.
+- Data pattern looks unusual.
+- Row count drops more than 30%.
 
-## Gemini Output Format
+Expected result:
 
-Gemini must return structured result only.
+- Critical fail blocks master update.
+- Warning over threshold blocks entire source update.
 
-Required fields:
+## 7. Master Replace Tests
 
-1. `status`
-2. `conversion_possible`
-3. `required_user_input`
-4. `conversion_factor`
-5. `converted_value`
-6. `converted_unit`
-7. `assumption_used`
-8. `explanation`
-9. `cannot_compare_reason`
+Test:
 
-Status values:
+- Old master data is not deleted before validation passes.
+- Only updated source rows are replaced.
+- Other sources are unaffected.
+- Validation failure keeps existing data.
+- Warning threshold breach blocks source.
+- `data_status` updated.
+- `last_refresh_at` updated.
+
+## 8. REFRESH_LOG Tests
+
+Test logging for:
 
 - `success`
-- `need_more_info`
-- `cannot_compare`
-- `error`
+- `failed`
+- `blocked_by_validation`
+- `completed_with_warning`
 
-## Gemini Failure Handling
+Ensure row counts, validation counts, action taken, error message, and triggered by are recorded.
 
-If Gemini fails:
+## 9. Search Tests
 
-- System must not crash.
-- If rule-based conversion works, use rule-based conversion.
-- If not, return `cannot_compare`.
-- Show safe message that unit interpretation is unavailable.
-- Do not change master data.
-- Do not retry indefinitely.
+Test:
 
-## Gemini Prompt Boundary
+- Search reads from `MASTER_PRICE_DATABASE` only.
+- Exact match.
+- Partial match.
+- Token match.
+- Alias match.
+- Simple fuzzy match.
+- `match_score` calculation.
+- Sort high to low.
+- Limit top 10.
+- No display of `source_name`, `source_type`, `match_reason`.
+- `SEARCH_LOG` writing.
 
-Send only necessary information:
+Example test cases:
 
-- `database_unit`
-- `user_unit`
-- `user_quantity`
-- `user_price_type`
-- `selected_item_name`
-- `note` if necessary
-- known conversion facts if any
+- Search `ปูนซีเมนต์` returns cement items.
+- Search `ปลั๊กไฟ` returns outlet/เต้ารับ aliases.
+- Search `สาย VAF 2x2.5` preserves spec.
+- Typo search returns fuzzy result if possible.
+- No result search returns suggestions/nearby items.
 
-Do not send:
+## 10. WebApp UI Tests
 
-- Entire `MASTER_PRICE_DATABASE`.
-- Entire source sheets.
-- Irrelevant data.
-- Personal user data.
-- Credentials or API keys.
+Test:
 
-## API Key / Credential Handling
+- Main search page loads.
+- Search input supports Thai, English, and specs.
+- Loading state.
+- Error state.
+- Result card fields.
+- Result card hides source and match reason.
+- User selects result manually.
+- No auto-select.
+- Detail section is read-only.
+- User can choose another result.
 
-Rules:
+## 11. Price Comparison Tests
 
-- Do not hardcode API keys.
-- Use Script Properties or secure configuration.
-- Do not show API keys in WebApp.
-- Do not log API keys.
-- If key is missing, show a safe error.
+Test:
+
+- Required `user_price`.
+- Required `user_unit`.
+- Required `user_quantity`.
+- Required `user_price_type`.
+- Optional `user_note`.
+- Dropdown default = `unknown`.
+- `material` compares to `material_cost`.
+- `labor` compares to `labor_cost`.
+- `total` compares to `total_cost`.
+- `unknown` defaults to `total_cost`.
+- If `total_cost` blank, fallback to `price`.
+- If reference field blank, return `cannot_compare`.
+- Calculate `variance_amount`.
+- Calculate `variance_percent`.
+- Apply ±10% threshold.
+
+## 12. Unit Conversion Tests
+
+Rule-based conversions:
+
+- kg ↔ ton
+- g ↔ kg
+- m ↔ cm
+- m2 ↔ cm2
+- m3 ↔ liter
+- piece ↔ dozen
+- hour ↔ day with assumption
+- day ↔ month with assumption
+
+Complex conversions:
+
+- roll → meter
+- bag → kilogram
+- job → point
+- set → item components
+- trip → distance/volume
+
+Expected:
+
+- Rule-based runs first.
+- Gemini used only when needed.
+- If cannot convert, result is `cannot_compare`.
+
+## 13. Gemini Tests
+
+Test:
+
+- Gemini used only for complex unit conversion.
+- Structured output.
+- `status` exists.
+- `assumption_used` exists.
+- `cannot_compare_reason` exists when applicable.
+- Gemini does not guess prices.
+- Gemini does not modify master/source/staging.
+- Gemini is not core search engine.
+- Gemini fail fallback works.
+- Prompt sends only necessary data.
+- Prompt does not send master database.
+- Prompt does not send credentials.
+
+## 14. Safety / Negative Tests
+
+Test that the system does not:
+
+- Let WebApp edit raw source sheets.
+- Let WebApp edit staging.
+- Let WebApp edit master.
+- Let comparison flow edit master.
+- Let Gemini edit master.
+- Auto-approve prices.
+- Auto-reject prices.
+- Auto-learn aliases into master.
+- Create/use `COMPARISON_LOG` in Phase 1.
+- Add login/dashboard/admin/export in Phase 1.

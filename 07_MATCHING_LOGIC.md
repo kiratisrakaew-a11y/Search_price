@@ -1,221 +1,152 @@
-# 06 Apps Script Spec
+# 07 Matching Logic
 
-This document defines responsibilities at the Apps Script level. It does not require exact function names, but implementation should be modular and follow these action groups.
+## Search Scope
 
-## 1. Source Refresh / Process Actions
+The WebApp must search from `MASTER_PRICE_DATABASE` only.
 
-Apps Script must support:
+Fields used for search:
 
-- Refresh TPSO from API.
-- Replace old data in `materialcost_tpso` only after API succeeds.
-- Process `laborcost_cgd`.
-- Process `laborcost_obec`.
-- Process `materialcost_obec`.
-- Check that source sheet exists.
-- Check required headers before processing.
-- Detect real header row for `materialcost_tpso`.
-- Stop and avoid master changes if API fails or returns 0 rows.
+- `item_name_original`
+- `item_name_clean`
+- `category_level_1`
+- `category_level_2`
+- `category_level_3`
+- `unit`
+- `note`
+- `search_keywords`
+- `alias_terms`
+- `normalized_text`
 
-## 2. Normalize Actions
+## Field Priority
 
-Apps Script must normalize each source into `STAGING_NORMALIZED`:
+Use this priority for scoring:
 
-- Normalize `laborcost_cgd`.
-- Normalize `laborcost_obec`.
-- Normalize `materialcost_obec`.
-- Normalize `materialcost_tpso`.
-- Map `material_cost`, `labor_cost`, `total_cost`, and `price` according to the confirmed mapping.
-- Create `item_name_clean`.
-- Create `search_keywords`.
-- Enrich `alias_terms` from `ALIAS_DICTIONARY`.
-- Create `normalized_text`.
-- Set `staged_at`.
+1. `item_name_clean`
+2. `item_name_original`
+3. `search_keywords`
+4. `alias_terms`
+5. `category_level_3`
+6. `category_level_2`
+7. `category_level_1`
+8. `note`
+9. `normalized_text`
 
-## 3. Validation Actions
+## Match Types
 
-Apps Script must validate staging before master update:
+Search must support:
 
-- Row count not 0.
-- Required headers exist.
-- `item_name_original` not blank.
-- `unit` not blank.
-- At least one of `material_cost` or `labor_cost` present.
-- No negative prices.
-- `source_name` and `source_type` not blank.
-- `price` and `total_cost` not blank.
-- Warning pattern checks.
-- Block if row count drops more than 30% from previous run.
+1. Exact match.
+2. Partial match.
+3. Token match.
+4. Alias match.
+5. Simple fuzzy match.
 
-## 4. Master Update Actions
+## Ranking
 
-Apps Script must:
-
-- Never delete old master data before validation passes.
-- Replace only rows for the updated source.
-- Avoid rebuilding the full master each time.
-- Keep existing rows if validation fails.
-- Block entire source if warning threshold is exceeded.
-- Avoid affecting other sources.
-- Update `data_status`.
-- Update `last_refresh_at`.
-
-## 5. REFRESH_LOG Actions
-
-Apps Script must write `REFRESH_LOG` for every source refresh/process attempt.
-
-Log fields include:
-
-- `log_id`
-- `source_name`
-- `refresh_type`
-- `started_at`
-- `finished_at`
-- `status`
-- row counts
-- validation counts
-- `action_taken`
-- `error_message`
-- `triggered_by`
-
-## 6. Search Actions
-
-Apps Script must:
-
-- Search `MASTER_PRICE_DATABASE` only.
-- Search multiple fields according to matching logic.
-- Support exact, partial, token, alias, and simple fuzzy matching.
 - Calculate `match_score`.
-- Sort by `match_score` descending.
+- Sort results by `match_score` descending.
 - Limit Phase 1 results to top 10.
-- Exclude `source_name`, `source_type`, and `match_reason` from user-facing result cards.
-- Write `SEARCH_LOG`.
 
-## 7. SEARCH_LOG Actions
+## User-Facing Display
 
-Apps Script must log:
+Search result cards must display:
 
-- `user_query`
-- `normalized_query`
-- `result_count`
-- `top_match_id`
-- `top_match_score`
-- `no_result_flag`
-- `suggested_terms`
-- `user_selected_master_id` if selected
-- `session_id`
+- `item_name`
+- `unit`
+- `material_cost`
+- `labor_cost`
+- `total_cost`
+- `price_basis`
+- `note`
+- `match_score`
+- `needs_review` if applicable
 
-Phase 1 does not use user feedback, but column exists for future use.
+Search result cards must not display:
 
-## 8. User Selection Actions
+- `source_name`
+- `source_type`
+- `match_reason`
 
-Apps Script must:
+`match_reason` may be useful internally but is not displayed in Phase 1.
 
-- Receive `selected_master_id`.
-- Fetch selected item from `MASTER_PRICE_DATABASE`.
-- Return detail data to WebApp.
-- Keep detail data read-only.
-- Update `SEARCH_LOG` with selected master id if possible.
+## Empty Search Result Handling
 
-## 9. Price Comparison Actions
+If no direct match is found, do not simply show "no data".
 
-Apps Script must accept:
+The system should show:
 
-- `selected_master_id`
-- `user_price`
-- `user_unit`
-- `user_quantity`
-- `user_price_type`
-- `user_note`
+- No direct match message.
+- Nearby results if available.
+- Suggested terms if available.
+- Suggested category if available.
 
-Apps Script must:
+## Search Keywords
 
-- Select reference price based on `user_price_type`.
-- Check unit matching.
-- Convert units if needed.
-- Return `cannot_compare` if conversion is impossible.
-- Calculate `variance_amount`.
-- Calculate `variance_percent`.
-- Use ±10% threshold for result classification.
-- Return `conversion_note`.
-- Return `assumption_used` if applicable.
-- Not write `COMPARISON_LOG` in Phase 1.
+`search_keywords` are generated from:
 
-## 10. Unit Conversion Actions
+- `item_name_clean`
+- `category_level_1`
+- `category_level_2`
+- `category_level_3`
+- `unit`
+- `note`
 
-Rule-based conversion must be attempted first.
+Rules:
 
-Support:
+- Preserve technical specs such as `2x2.5`, `20mm`, `1/2"`, `VAF`, `THW`.
+- Remove duplicates.
+- Regenerate at source refresh.
+- Do not depend on manual keywords inside monthly replaced source data.
 
-- kg ↔ ton
-- g ↔ kg
-- m ↔ cm
-- m2 ↔ cm2
-- m3 ↔ liter
-- piece ↔ dozen
-- hour ↔ day with assumption
-- day ↔ month with assumption
+## Alias Terms
 
-If rule-based conversion cannot handle the unit, use Gemini only within the boundaries in `08_GEMINI_API_BOUNDARY.md`.
+`alias_terms` are enriched from `ALIAS_DICTIONARY`.
 
-## 11. WebApp UI Actions
+Rules:
 
-Apps Script must support WebApp actions:
+- Use only aliases where `active = yes`.
+- Match against `user_term`, `canonical_term`, `related_terms`, and category hints.
+- Do not invent aliases automatically.
+- Do not auto-add aliases to `ALIAS_DICTIONARY`.
 
-- Load WebApp.
-- Receive query.
-- Return search results.
-- Receive selected master id.
-- Return selected item detail.
-- Receive price comparison input.
-- Return comparison result.
-- Support loading/error/no-result states.
+Example:
 
-## 12. Admin / Manual Trigger Actions
+```text
+user_term = ปลั๊กไฟ
+canonical_term = เต้ารับไฟฟ้า
+related_terms = เต้ารับ, จุดปลั๊ก, outlet, socket
+```
 
-Google Sheets custom menu should include:
+If a row contains `เต้ารับ`, it may get alias terms:
 
-1. Refresh TPSO from API
-2. Process CGD
-3. Process OBEC Labor
-4. Process OBEC Material
-5. Rebuild/Refresh Alias Enrichment
-6. Validate Staging
-7. Update Master for Selected Source
-8. View Last Refresh Status
+```text
+ปลั๊กไฟ, เต้ารับไฟฟ้า, จุดปลั๊ก, outlet, socket
+```
 
-## 13. Error Handling
+## Normalized Text
 
-Handle:
+`normalized_text` combines:
 
-- Sheet not found.
-- Missing header.
-- API fail.
-- API returns 0 rows.
-- Validation fail.
-- Search fail.
-- Empty query.
-- Selected master id not found.
-- Invalid `user_price`.
-- Invalid `user_quantity`.
-- Empty `user_unit`.
-- Invalid `user_price_type`.
-- Unit conversion fail.
-- Gemini fail.
+- `item_name_original`
+- `item_name_clean`
+- `category_level_1`
+- `category_level_2`
+- `category_level_3`
+- `unit`
+- `note`
+- `search_keywords`
+- `alias_terms`
+- `source_type`
+- `price_basis`
 
-Errors must not delete or corrupt master data.
+Then clean:
 
-## 14. Safety Boundaries
+- Lowercase English.
+- Trim spaces.
+- Remove duplicates where practical.
 
-Apps Script must not:
+## AI Search Boundary
 
-- Let WebApp edit raw source sheets.
-- Let WebApp edit `STAGING_NORMALIZED`.
-- Let WebApp edit `MASTER_PRICE_DATABASE`.
-- Let comparison flow edit master.
-- Let Gemini edit master.
-- Auto-approve prices.
-- Auto-reject prices.
-- Auto-learn aliases into master directly.
-- Rebuild master unnecessarily.
-- Delete existing data before validation passes.
-- Use AI search as Phase 1 core dependency.
+Gemini must not be used as the core Phase 1 search engine.
+
+Search in Phase 1 must be implemented with Apps Script over `MASTER_PRICE_DATABASE`.

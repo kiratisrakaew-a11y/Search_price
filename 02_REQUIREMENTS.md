@@ -1,96 +1,174 @@
-# 01 Project Overview
+# 02 Requirements
 
-## Purpose
+## 1. Source Registry
 
-This project builds a Phase 1 BOQ / construction / service / material price reference search system using Google Sheets, Google Apps Script, and a simple WebApp.
+| Source Sheet | Use in System | Source Type | Update Frequency | Update Method | Price Mapping |
+|---|---|---|---|---|---|
+| `laborcost_cgd` | Yes | labor | yearly / manual | replace old data | `labor_cost_thb` → `labor_cost` |
+| `laborcost_obec` | Yes | labor | yearly / manual | replace old data | `labor_cost_thb` → `labor_cost` |
+| `materialcost_obec` | Yes | material + labor | yearly / manual | replace old data | `material_cost_thb` → `material_cost`, `labor_cost_thb` → `labor_cost` |
+| `materialcost_tpso` | Yes | material | monthly / API | replace old data | `priceCur` → `material_cost` |
 
-The system normalizes multiple source sheets with different structures into a single searchable `MASTER_PRICE_DATABASE`. Users can search price items, select a result manually, enter their own price/unit/quantity, and compare it against the reference price.
+## 2. Master Database Requirements
 
-## Main Goals
+The central searchable sheet is `MASTER_PRICE_DATABASE`.
 
-1. Build a reliable master price database from multiple sources.
-2. Preserve raw source data and prevent unsafe overwrites.
-3. Support practical search across item names, categories, notes, keywords, aliases, and normalized text.
-4. Allow users to choose search results manually.
-5. Compare user-provided price against the selected database reference.
-6. Support unit conversion using rule-based logic first, then Gemini only for complex unit interpretation.
-7. Maintain auditability through refresh and search logs.
-8. Keep Codex implementation strictly within Phase 1 scope.
+It must contain separate price columns:
 
-## Confirmed Phase 1 Scope
+- `price`
+- `material_cost`
+- `labor_cost`
+- `total_cost`
+- `price_basis`
 
-Phase 1 includes:
+Price mapping:
 
-- Source refresh/process actions.
-- Normalization into `STAGING_NORMALIZED`.
-- Validation before master updates.
-- Source-specific replacement into `MASTER_PRICE_DATABASE`.
-- `REFRESH_LOG`.
-- Search from `MASTER_PRICE_DATABASE` only.
-- `SEARCH_LOG`.
-- `ALIAS_DICTIONARY` enrichment.
-- Simple WebApp for search + compare.
-- User manual selection of search result.
-- Unit matching and unit conversion.
-- Gemini-assisted unit conversion only when rule-based conversion is insufficient.
-- Price comparison display.
-- Google Sheets custom menu for admin/manual actions.
-- Testing/check routines.
+### `laborcost_cgd`
 
-Phase 1 excludes:
+- `material_cost` = blank
+- `labor_cost` = `labor_cost_thb`
+- `total_cost` = `labor_cost_thb`
+- `price` = `labor_cost_thb`
+- `price_basis` = `labor_only`
 
-- Login.
-- Role-based permission.
-- Approval workflow.
-- Full admin panel.
-- Dashboard.
-- Export report.
-- `COMPARISON_LOG`.
-- Auto-approve price.
-- Auto-reject price.
-- Auto-update master price from WebApp.
-- Auto-learn alias directly into master.
-- AI search engine.
-- WebApp editing of master/source/staging sheets.
+### `laborcost_obec`
 
-## Data Flow
+- `material_cost` = blank
+- `labor_cost` = `labor_cost_thb`
+- `total_cost` = `labor_cost_thb`
+- `price` = `labor_cost_thb`
+- `price_basis` = `labor_only`
+
+### `materialcost_obec`
+
+- `material_cost` = `material_cost_thb`
+- `labor_cost` = `labor_cost_thb`
+- `total_cost` = `material_cost_thb + labor_cost_thb`
+- `price` = `total_cost`
+- `price_basis` = `material_plus_labor`
+
+The WebApp must display `material_cost` and `labor_cost` separately and may also display `total_cost`.
+
+### `materialcost_tpso`
+
+- `material_cost` = `priceCur`
+- `labor_cost` = blank
+- `total_cost` = `priceCur`
+- `price` = `priceCur`
+- `price_basis` = `material_only`
+
+## 3. Notes Requirement
+
+- Notes must be preserved from all source sheets.
+- Notes must not be dropped during cleaning, normalization, or master update.
+
+## 4. Search Requirements
+
+Search must read from `MASTER_PRICE_DATABASE` only.
+
+Search must use multiple fields:
+
+- `item_name_original`
+- `item_name_clean`
+- `category_level_1`
+- `category_level_2`
+- `category_level_3`
+- `unit`
+- `note`
+- `search_keywords`
+- `alias_terms`
+- `normalized_text`
+
+Search must support:
+
+- Exact match.
+- Partial match.
+- Token match.
+- Alias match.
+- Simple fuzzy match.
+
+Search results must be ranked by `match_score`, high to low, and limited to top 10 in Phase 1.
+
+## 5. Search Display Requirements
+
+Search result cards must display:
+
+- `item_name`
+- `unit`
+- `material_cost`
+- `labor_cost`
+- `total_cost`
+- `price_basis`
+- `note`
+- `match_score`
+- `needs_review` if applicable
+
+Search result cards must not display:
+
+- `source_name`
+- `source_type`
+- `match_reason`
+
+## 6. User Selection / Comparison Requirements
+
+The WebApp must not auto-select a result.
+
+User must manually select a search result before comparison.
+
+After selection, user must input:
+
+- `user_price`
+- `user_unit`
+- `user_quantity`
+- `user_price_type`
+- `user_note`
+
+`user_note` is optional. Other fields are required.
+
+`user_price_type` values:
+
+- `material`
+- `labor`
+- `total`
+- `unknown`
+
+Default is `unknown`.
+
+## 7. Unit Conversion Requirements
+
+The system must check unit matching before comparison.
+
+If units match, compare directly.
+
+If units differ, use rule-based conversion first.
+
+Use Gemini only when the unit is not straightforward and requires interpretation or additional assumptions.
+
+If conversion is not possible, return `cannot_compare` and do not conclude whether the user price is high or low.
+
+## 8. Comparison Requirements
+
+Use threshold ±10%:
+
+- Within ±10% = `close_to_reference`
+- More than +10% = `higher_than_reference`
+- Less than -10% = `lower_than_reference`
+- Cannot convert = `cannot_compare`
+
+Formula:
 
 ```text
-RAW SOURCE SHEETS
-→ STAGING_NORMALIZED
-→ MASTER_PRICE_DATABASE
-→ WEBAPP SEARCH
-→ USER SELECTS RESULT
-→ USER INPUTS PRICE / UNIT / QUANTITY / PRICE TYPE
-→ UNIT MATCHING / CONVERSION
-→ PRICE COMPARISON RESULT
+variance_amount = user_comparable_price - database_reference_price
+variance_percent = variance_amount / database_reference_price * 100
 ```
 
-## Operational Source Sheets
+Phase 1 must not write `COMPARISON_LOG`.
 
-1. `laborcost_cgd`
-2. `laborcost_obec`
-3. `materialcost_obec`
-4. `materialcost_tpso`
+## 9. Logging Requirements
 
-## Processing / Control Sheets
+The system must use:
 
-1. `STAGING_NORMALIZED`
-2. `MASTER_PRICE_DATABASE`
-3. `ALIAS_DICTIONARY`
-4. `REFRESH_LOG`
-5. `SEARCH_LOG`
-6. `ALIAS_SUGGESTIONS` if alias suggestion process is implemented
+- `REFRESH_LOG` for refresh/process outcomes.
+- `SEARCH_LOG` for search behavior.
 
-## Documentation Sheet
-
-- `CHECKLIST_2_SCHEMA`
-
-## External Services
-
-1. TPSO API, used only to update `materialcost_tpso`.
-2. Gemini, used only for complex unit conversion support.
-
-## Implementation Principle
-
-The master database must be treated like a warehouse ledger, not a scratchpad. Nothing should overwrite it unless new data has passed staging and validation.
+Phase 1 does not use `COMPARISON_LOG`.

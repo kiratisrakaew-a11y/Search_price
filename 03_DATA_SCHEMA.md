@@ -1,174 +1,195 @@
-# 02 Requirements
+# 03 Data Schema
 
-## 1. Source Registry
+## MASTER_PRICE_DATABASE
 
-| Source Sheet | Use in System | Source Type | Update Frequency | Update Method | Price Mapping |
-|---|---|---|---|---|---|
-| `laborcost_cgd` | Yes | labor | yearly / manual | replace old data | `labor_cost_thb` → `labor_cost` |
-| `laborcost_obec` | Yes | labor | yearly / manual | replace old data | `labor_cost_thb` → `labor_cost` |
-| `materialcost_obec` | Yes | material + labor | yearly / manual | replace old data | `material_cost_thb` → `material_cost`, `labor_cost_thb` → `labor_cost` |
-| `materialcost_tpso` | Yes | material | monthly / API | replace old data | `priceCur` → `material_cost` |
+`MASTER_PRICE_DATABASE` is the final searchable price database.
 
-## 2. Master Database Requirements
+Rules:
 
-The central searchable sheet is `MASTER_PRICE_DATABASE`.
+- Row 1 = header.
+- Row 2 onward = data.
+- Header must be one row only.
+- No field description row.
+- No merged cells.
+- No blank row before header.
+- No formulas that mutate data outside refresh logic.
 
-It must contain separate price columns:
+Columns:
 
-- `price`
-- `material_cost`
-- `labor_cost`
-- `total_cost`
-- `price_basis`
+1. `master_id`
+2. `source_name`
+3. `source_type`
+4. `update_frequency`
+5. `item_code`
+6. `item_name_original`
+7. `item_name_clean`
+8. `category_level_1`
+9. `category_level_2`
+10. `category_level_3`
+11. `unit`
+12. `price`
+13. `material_cost`
+14. `labor_cost`
+15. `total_cost`
+16. `price_basis`
+17. `province`
+18. `region`
+19. `effective_year`
+20. `effective_month`
+21. `note`
+22. `search_keywords`
+23. `alias_terms`
+24. `normalized_text`
+25. `data_status`
+26. `last_refresh_at`
 
-Price mapping:
+## STAGING_NORMALIZED
 
-### `laborcost_cgd`
+`STAGING_NORMALIZED` stores normalized rows and validation results before master update.
 
-- `material_cost` = blank
-- `labor_cost` = `labor_cost_thb`
-- `total_cost` = `labor_cost_thb`
-- `price` = `labor_cost_thb`
-- `price_basis` = `labor_only`
+Rules:
 
-### `laborcost_obec`
+- Row 1 = header.
+- Row 2 onward = data.
+- Header must be one row only.
+- WebApp must not read from this sheet directly.
 
-- `material_cost` = blank
-- `labor_cost` = `labor_cost_thb`
-- `total_cost` = `labor_cost_thb`
-- `price` = `labor_cost_thb`
-- `price_basis` = `labor_only`
+Columns:
 
-### `materialcost_obec`
+1. `staging_id`
+2. `source_name`
+3. `source_type`
+4. `update_frequency`
+5. `item_code`
+6. `item_name_original`
+7. `item_name_clean`
+8. `category_level_1`
+9. `category_level_2`
+10. `category_level_3`
+11. `unit`
+12. `price`
+13. `material_cost`
+14. `labor_cost`
+15. `total_cost`
+16. `price_basis`
+17. `province`
+18. `region`
+19. `effective_year`
+20. `effective_month`
+21. `note`
+22. `search_keywords`
+23. `alias_terms`
+24. `normalized_text`
+25. `validation_status`
+26. `validation_issues`
+27. `needs_review`
+28. `review_note`
+29. `staged_at`
 
-- `material_cost` = `material_cost_thb`
-- `labor_cost` = `labor_cost_thb`
-- `total_cost` = `material_cost_thb + labor_cost_thb`
-- `price` = `total_cost`
-- `price_basis` = `material_plus_labor`
+## ALIAS_DICTIONARY
 
-The WebApp must display `material_cost` and `labor_cost` separately and may also display `total_cost`.
+Used to enrich `alias_terms`.
 
-### `materialcost_tpso`
+Columns:
 
-- `material_cost` = `priceCur`
-- `labor_cost` = blank
-- `total_cost` = `priceCur`
-- `price` = `priceCur`
-- `price_basis` = `material_only`
+1. `alias_id`
+2. `user_term`
+3. `canonical_term`
+4. `related_terms`
+5. `category_hint`
+6. `source_type_hint`
+7. `confidence`
+8. `active`
+9. `note`
+10. `updated_at`
 
-## 3. Notes Requirement
+Rules:
 
-- Notes must be preserved from all source sheets.
-- Notes must not be dropped during cleaning, normalization, or master update.
+- `active` = `yes` or `no`.
+- `confidence` = `high`, `medium`, or `low`.
+- `related_terms` separated by comma.
+- Use only rows where `active = yes` for enrichment.
+- Do not auto-write aliases to this sheet without review.
 
-## 4. Search Requirements
+## ALIAS_SUGGESTIONS
 
-Search must read from `MASTER_PRICE_DATABASE` only.
+Optional if alias suggestion process is implemented.
 
-Search must use multiple fields:
+Columns:
 
-- `item_name_original`
-- `item_name_clean`
-- `category_level_1`
-- `category_level_2`
-- `category_level_3`
-- `unit`
-- `note`
-- `search_keywords`
-- `alias_terms`
-- `normalized_text`
+1. `suggestion_id`
+2. `user_query`
+3. `suggested_user_term`
+4. `suggested_canonical_term`
+5. `suggested_related_terms`
+6. `category_hint`
+7. `source_type_hint`
+8. `reason`
+9. `confidence`
+10. `status`
+11. `reviewed_by`
+12. `reviewed_at`
+13. `created_at`
 
-Search must support:
+Status values:
 
-- Exact match.
-- Partial match.
-- Token match.
-- Alias match.
-- Simple fuzzy match.
+- `pending`
+- `approved`
+- `rejected`
 
-Search results must be ranked by `match_score`, high to low, and limited to top 10 in Phase 1.
+Approved aliases may later be copied into `ALIAS_DICTIONARY` through a controlled process.
 
-## 5. Search Display Requirements
+## REFRESH_LOG
 
-Search result cards must display:
+Columns:
 
-- `item_name`
-- `unit`
-- `material_cost`
-- `labor_cost`
-- `total_cost`
-- `price_basis`
-- `note`
-- `match_score`
-- `needs_review` if applicable
+1. `log_id`
+2. `source_name`
+3. `refresh_type`
+4. `started_at`
+5. `finished_at`
+6. `status`
+7. `source_row_count_before`
+8. `source_row_count_after`
+9. `staging_row_count`
+10. `master_row_count_before`
+11. `master_row_count_after`
+12. `validation_pass_count`
+13. `validation_warning_count`
+14. `validation_fail_count`
+15. `needs_review_count`
+16. `action_taken`
+17. `error_message`
+18. `triggered_by`
 
-Search result cards must not display:
+Status values:
 
-- `source_name`
-- `source_type`
-- `match_reason`
+- `success`
+- `failed`
+- `blocked_by_validation`
+- `completed_with_warning`
 
-## 6. User Selection / Comparison Requirements
+Action values:
 
-The WebApp must not auto-select a result.
+- `updated_master`
+- `kept_existing_master_data`
+- `manual_review_required`
 
-User must manually select a search result before comparison.
+## SEARCH_LOG
 
-After selection, user must input:
+Columns:
 
-- `user_price`
-- `user_unit`
-- `user_quantity`
-- `user_price_type`
-- `user_note`
+1. `search_id`
+2. `searched_at`
+3. `user_query`
+4. `normalized_query`
+5. `result_count`
+6. `top_match_id`
+7. `top_match_score`
+8. `no_result_flag`
+9. `suggested_terms`
+10. `user_selected_master_id`
+11. `feedback`
+12. `session_id`
 
-`user_note` is optional. Other fields are required.
-
-`user_price_type` values:
-
-- `material`
-- `labor`
-- `total`
-- `unknown`
-
-Default is `unknown`.
-
-## 7. Unit Conversion Requirements
-
-The system must check unit matching before comparison.
-
-If units match, compare directly.
-
-If units differ, use rule-based conversion first.
-
-Use Gemini only when the unit is not straightforward and requires interpretation or additional assumptions.
-
-If conversion is not possible, return `cannot_compare` and do not conclude whether the user price is high or low.
-
-## 8. Comparison Requirements
-
-Use threshold ±10%:
-
-- Within ±10% = `close_to_reference`
-- More than +10% = `higher_than_reference`
-- Less than -10% = `lower_than_reference`
-- Cannot convert = `cannot_compare`
-
-Formula:
-
-```text
-variance_amount = user_comparable_price - database_reference_price
-variance_percent = variance_amount / database_reference_price * 100
-```
-
-Phase 1 must not write `COMPARISON_LOG`.
-
-## 9. Logging Requirements
-
-The system must use:
-
-- `REFRESH_LOG` for refresh/process outcomes.
-- `SEARCH_LOG` for search behavior.
-
-Phase 1 does not use `COMPARISON_LOG`.
+Phase 1 does not use user feedback, but the column may remain for future use.

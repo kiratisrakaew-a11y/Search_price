@@ -1,195 +1,150 @@
-# 03 Data Schema
+# 04 Google Sheets Architecture
 
-## MASTER_PRICE_DATABASE
+## Workbook Structure
 
-`MASTER_PRICE_DATABASE` is the final searchable price database.
+Operational sheets:
 
-Rules:
+1. `laborcost_cgd`
+2. `laborcost_obec`
+3. `materialcost_obec`
+4. `materialcost_tpso`
+5. `STAGING_NORMALIZED`
+6. `MASTER_PRICE_DATABASE`
+7. `ALIAS_DICTIONARY`
+8. `REFRESH_LOG`
+9. `SEARCH_LOG`
+10. `ALIAS_SUGGESTIONS` if alias suggestion process is implemented
 
-- Row 1 = header.
-- Row 2 onward = data.
+Documentation sheet:
+
+11. `CHECKLIST_2_SCHEMA`
+
+## Sheet Roles
+
+### `laborcost_cgd`
+
+- Raw source sheet.
+- Manual update.
+- Yearly update.
+- Input only.
+- WebApp must not read directly.
+
+### `laborcost_obec`
+
+- Raw source sheet.
+- Manual update.
+- Yearly update.
+- Input only.
+- WebApp must not read directly.
+
+### `materialcost_obec`
+
+- Raw source sheet.
+- Manual update.
+- Yearly update.
+- Input only.
+- WebApp must not read directly.
+
+### `materialcost_tpso`
+
+- Raw source sheet.
+- API monthly update.
+- Input only.
+- WebApp must not read directly.
+- Header may not be on row 1. Must use special header detection.
+
+### `STAGING_NORMALIZED`
+
+- Processing sheet.
+- Used for normalization and validation before master update.
+- WebApp must not read directly.
+
+### `MASTER_PRICE_DATABASE`
+
+- Searchable master database.
+- WebApp reads from this sheet only.
+- Comparison flow reads from this sheet only.
+- User should not edit manually.
+
+### `ALIAS_DICTIONARY`
+
+- Dictionary for user terms, canonical terms, and related search terms.
+- Used to enrich `alias_terms`.
+- Can be edited through controlled manual process.
+
+### `REFRESH_LOG`
+
+- Stores refresh/process logs.
+- Used for audit.
+- WebApp does not read directly.
+
+### `SEARCH_LOG`
+
+- Stores user search behavior.
+- Used to improve alias/search quality later.
+- WebApp may write to this sheet.
+
+### `CHECKLIST_2_SCHEMA`
+
+- Documentation only.
+- Not a data source.
+- WebApp must not read.
+
+## Header Rules
+
+For all database/processing/log sheets:
+
 - Header must be one row only.
-- No field description row.
+- Header should be row 1.
+- No field description row in row 2.
 - No merged cells.
 - No blank row before header.
-- No formulas that mutate data outside refresh logic.
 
-Columns:
+Exception:
 
-1. `master_id`
-2. `source_name`
-3. `source_type`
-4. `update_frequency`
-5. `item_code`
-6. `item_name_original`
-7. `item_name_clean`
-8. `category_level_1`
-9. `category_level_2`
-10. `category_level_3`
-11. `unit`
-12. `price`
-13. `material_cost`
-14. `labor_cost`
-15. `total_cost`
-16. `price_basis`
-17. `province`
-18. `region`
-19. `effective_year`
-20. `effective_month`
-21. `note`
-22. `search_keywords`
-23. `alias_terms`
-24. `normalized_text`
-25. `data_status`
-26. `last_refresh_at`
+- `materialcost_tpso` may contain metadata before the actual header.
+- Script must find real header row by fields such as `Column ID`, `type`, `typeName`.
+- If header row cannot be found, stop processing and do not update master.
 
-## STAGING_NORMALIZED
+## Sheet Protection
 
-`STAGING_NORMALIZED` stores normalized rows and validation results before master update.
+Manual edit allowed:
 
-Rules:
+- `laborcost_cgd`
+- `laborcost_obec`
+- `materialcost_obec`
+- `ALIAS_DICTIONARY`
 
-- Row 1 = header.
-- Row 2 onward = data.
-- Header must be one row only.
-- WebApp must not read from this sheet directly.
+System/API update only:
 
-Columns:
+- `materialcost_tpso`
+- `STAGING_NORMALIZED`
+- `MASTER_PRICE_DATABASE`
+- `REFRESH_LOG`
+- `SEARCH_LOG`
+- `ALIAS_SUGGESTIONS` if implemented
 
-1. `staging_id`
-2. `source_name`
-3. `source_type`
-4. `update_frequency`
-5. `item_code`
-6. `item_name_original`
-7. `item_name_clean`
-8. `category_level_1`
-9. `category_level_2`
-10. `category_level_3`
-11. `unit`
-12. `price`
-13. `material_cost`
-14. `labor_cost`
-15. `total_cost`
-16. `price_basis`
-17. `province`
-18. `region`
-19. `effective_year`
-20. `effective_month`
-21. `note`
-22. `search_keywords`
-23. `alias_terms`
-24. `normalized_text`
-25. `validation_status`
-26. `validation_issues`
-27. `needs_review`
-28. `review_note`
-29. `staged_at`
+Documentation only:
 
-## ALIAS_DICTIONARY
+- `CHECKLIST_2_SCHEMA`
 
-Used to enrich `alias_terms`.
+## WebApp Scope
 
-Columns:
+WebApp read:
 
-1. `alias_id`
-2. `user_term`
-3. `canonical_term`
-4. `related_terms`
-5. `category_hint`
-6. `source_type_hint`
-7. `confidence`
-8. `active`
-9. `note`
-10. `updated_at`
+- `MASTER_PRICE_DATABASE`
+- `ALIAS_DICTIONARY` only if necessary for search
 
-Rules:
+WebApp write:
 
-- `active` = `yes` or `no`.
-- `confidence` = `high`, `medium`, or `low`.
-- `related_terms` separated by comma.
-- Use only rows where `active = yes` for enrichment.
-- Do not auto-write aliases to this sheet without review.
+- `SEARCH_LOG` only
 
-## ALIAS_SUGGESTIONS
+WebApp must not write:
 
-Optional if alias suggestion process is implemented.
+- Raw source sheets
+- `STAGING_NORMALIZED`
+- `MASTER_PRICE_DATABASE`
+- `REFRESH_LOG`
+- `ALIAS_DICTIONARY`
 
-Columns:
-
-1. `suggestion_id`
-2. `user_query`
-3. `suggested_user_term`
-4. `suggested_canonical_term`
-5. `suggested_related_terms`
-6. `category_hint`
-7. `source_type_hint`
-8. `reason`
-9. `confidence`
-10. `status`
-11. `reviewed_by`
-12. `reviewed_at`
-13. `created_at`
-
-Status values:
-
-- `pending`
-- `approved`
-- `rejected`
-
-Approved aliases may later be copied into `ALIAS_DICTIONARY` through a controlled process.
-
-## REFRESH_LOG
-
-Columns:
-
-1. `log_id`
-2. `source_name`
-3. `refresh_type`
-4. `started_at`
-5. `finished_at`
-6. `status`
-7. `source_row_count_before`
-8. `source_row_count_after`
-9. `staging_row_count`
-10. `master_row_count_before`
-11. `master_row_count_after`
-12. `validation_pass_count`
-13. `validation_warning_count`
-14. `validation_fail_count`
-15. `needs_review_count`
-16. `action_taken`
-17. `error_message`
-18. `triggered_by`
-
-Status values:
-
-- `success`
-- `failed`
-- `blocked_by_validation`
-- `completed_with_warning`
-
-Action values:
-
-- `updated_master`
-- `kept_existing_master_data`
-- `manual_review_required`
-
-## SEARCH_LOG
-
-Columns:
-
-1. `search_id`
-2. `searched_at`
-3. `user_query`
-4. `normalized_query`
-5. `result_count`
-6. `top_match_id`
-7. `top_match_score`
-8. `no_result_flag`
-9. `suggested_terms`
-10. `user_selected_master_id`
-11. `feedback`
-12. `session_id`
-
-Phase 1 does not use user feedback, but the column may remain for future use.
+Phase 1 comparison flow does not write `COMPARISON_LOG`.
